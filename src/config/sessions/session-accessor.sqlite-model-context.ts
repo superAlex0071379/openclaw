@@ -34,6 +34,10 @@ import {
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
+import type {
+  SessionModelContextLimits,
+  SessionTranscriptModelContext,
+} from "./session-history-read.types.js";
 import { projectModelContextEventSql } from "./session-model-context-projection.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
@@ -53,12 +57,7 @@ import {
 } from "./transcript-tree.js";
 
 type ContextEntry = SessionTreeEntry & { seq: number };
-export type SessionModelContextLimits = {
-  maxBytes: number;
-  maxEvents: number;
-  /** Detached model views may omit result bodies; evidence and fork readers remain strict. */
-  toolResultOverflow?: "omit";
-};
+export type { SessionModelContextLimits } from "./session-history-read.types.js";
 type ModelContextRequest = {
   entry: ContextEntry;
   omitCheckpoint: boolean;
@@ -161,6 +160,42 @@ export function validateSessionTranscriptContextAdmission(
     throw new SessionTranscriptReadFenceError(
       "Current-turn transcript admission is no longer readable",
     );
+  }
+}
+
+/** Validate detached context using the final reader's transaction-local facts. */
+export function validateSessionTranscriptContextInDatabase(
+  database: Pick<OpenClawAgentDatabase, "db" | "path">,
+  resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>,
+  validation: {
+    version?: SessionTranscriptContextVersion;
+    admission?: UserTurnTranscriptAdmissionReceipt;
+    through?: TranscriptEntryAnchor;
+  },
+): void {
+  const { version, admission, through } = validation;
+  if (admission) {
+    if (
+      !runWithSessionTranscriptReadFence(admission, () =>
+        resolveSqliteSessionTranscriptReadFence({ database, ...resolved }),
+      )
+    ) {
+      throw new SessionTranscriptReadFenceError(
+        "Current-turn transcript admission is no longer readable",
+      );
+    }
+  } else if (!through) {
+    const current = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
+    if (
+      current?.generation !== version?.generation ||
+      current?.rawSeq !== version?.rawSeq ||
+      current?.updatedAt !== version?.updatedAt
+    ) {
+      throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
+    }
+  }
+  if (through) {
+    assertContextAnchor(database, resolved, through);
   }
 }
 
@@ -322,10 +357,7 @@ export function readSessionTranscriptModelContext(
   scope: SessionTranscriptReadScope,
   through?: TranscriptEntryAnchor,
   limits?: SessionModelContextLimits,
-): {
-  events: TranscriptEvent[];
-  version?: SessionTranscriptContextVersion;
-} {
+): SessionTranscriptModelContext {
   if (
     limits &&
     (!Number.isSafeInteger(limits.maxBytes) ||
