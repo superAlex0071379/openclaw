@@ -1,14 +1,27 @@
-// Public contracts shared by package activation and its existing callers.
 import type { LocalPackageOverridesResult } from "./package-local-overrides-shared.js";
+import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import type { PackagePostInstallVerifier } from "./package-update-verification-step.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import type { NativePackageStage } from "./update-native-package-stage.js";
 import type { NpmGlobalPrefixLayout } from "./update-npm-prefix.js";
+import type { UpdateRecoveryFence } from "./update-run-recovery-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+
+export type PackageActivationOptions = {
+  fence: UpdateRecoveryFence;
+  runtime: PackageActivationRuntime;
+  onPrepared: (command: string) => void;
+  onUnavailable?: (message: string) => void;
+  onWarning?: (message: string) => void;
+};
 
 /** The orchestrator owns schema safety and service verification before confirming or restoring. */
 export type PackageUpdateTransaction = {
   backupRoot: string;
+  /** Capture root outside journal retirement; cleared when snapshots must be retained. */
+  databaseBackupRoot?: string;
+  /** Drops server-side captures; retirement calls it before removing the snapshot root. */
+  discardDatabaseCaptures?: () => Promise<void>;
   assertRollbackSafe?: () => Promise<void>;
   rollback: (
     assertCurrent: () => void,
@@ -35,6 +48,7 @@ export type StagedPackageInstall = {
   packageRoot: string;
   installTarget: ResolvedGlobalInstallTarget;
   native?: NativePackageStage;
+  activationCustody?: boolean;
 };
 
 export type StagedPackageSwapParams = {
@@ -44,9 +58,11 @@ export type StagedPackageSwapParams = {
   postVerifyStep?: PackagePostInstallVerifier;
   beforeActivate?: () => Promise<void>;
   assertCurrent?: () => void;
+  reserveInstallSlot?: (root: string) => void;
   onLiveMutation?: () => void;
-  onTransaction?: (transaction: PackageUpdateTransaction) => void;
+  onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   timeoutMs?: number;
+  activation?: PackageActivationOptions;
   localOverrides?: { reapply: boolean; env?: NodeJS.ProcessEnv };
   onLocalOverrides?: (result: LocalPackageOverridesResult) => void;
 };
