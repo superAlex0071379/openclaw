@@ -1,0 +1,50 @@
+import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
+import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
+
+type ModelProviders = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+type ConfiguredModel = ModelProviders[string]["models"][number];
+
+function configuredProviders(providers: ModelProviders): Pick<OpenClawConfig, "models"> {
+  return { models: { providers } };
+}
+
+function configuredModel(id: string, name: string): ConfiguredModel {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 4_096,
+  };
+}
+
+function configuredProvider(
+  baseUrl: string,
+  models: ConfiguredModel[] = [],
+): ModelProviders[string] {
+  return { baseUrl, models };
+}
+
+const defaultProviderBaseUrl = "https://openai.example.com/v1";
+const localProvider = configuredProvider("http://127.0.0.1:9191/v1", [
+  configuredModel("local-good", "Local Good"),
+]);
+
+describe("resolveConfiguredProviderFallback", () => {
+  it("preserves configured provider preference order", () => {
+    expect(
+      resolveConfiguredProviderFallback({
+        cfg: configuredProviders({
+          openai: configuredProvider(defaultProviderBaseUrl),
+          first: configuredProvider("http://127.0.0.1:9192/v1", [
+            configuredModel("first-model", "First Model"),
+          ]),
+          second: localProvider,
+        }),
+      }),
+    ).toEqual({ provider: "first", model: "first-model" });
+  });
+});
